@@ -1,0 +1,87 @@
+*{
+margin:0;
+padding:0;
+box-sizing:border-box;
+font-family:Arial,sans-serif;
+}
+
+body{
+background:#0b1220;
+color:#fff;
+}
+
+.navbar{
+display:flex;
+justify-content:space-between;
+align-items:center;
+padding:20px 8%;
+}
+
+.logo{
+font-size:28px;
+font-weight:bold;
+color:#3b82f6;
+}
+
+.nav-links{
+display:flex;
+list-style:none;
+gap:25px;
+}
+
+.nav-links a{
+color:white;
+text-decoration:none;
+}
+
+.hero{
+min-height:85vh;
+display:flex;
+flex-direction:column;
+justify-content:center;
+align-items:center;
+text-align:center;
+padding:20px;
+}
+
+.hero h1{
+font-size:48px;
+margin-bottom:20px;
+}
+
+.hero p{
+max-width:700px;
+font-size:20px;
+color:#cbd5e1;
+margin-bottom:35px;
+line-height:1.7;
+}
+
+.buttons{
+display:flex;
+gap:15px;
+flex-wrap:wrap;
+}
+
+.btn-primary{
+background:#2563eb;
+color:white;
+padding:14px 28px;
+border-radius:8px;
+text-decoration:none;
+font-weight:bold;
+}
+
+.btn-secondary{
+border:2px solid #2563eb;
+color:white;
+padding:14px 28px;
+border-radius:8px;
+text-decoration:none;
+font-weight:bold;
+}
+
+.btn-primary:hover,
+.btn-secondary:hover{
+opacity:.9;
+}
