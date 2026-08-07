@@ -1,87 +1,171 @@
+/* ===========================================
+   KIOREL
+   AI-Powered Public Intelligence Platform
+=========================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
 *{
 margin:0;
 padding:0;
 box-sizing:border-box;
-font-family:Arial,sans-serif;
+font-family:'Inter',sans-serif;
+scroll-behavior:smooth;
 }
 
 body{
-background:#0b1220;
+background:#07111f;
 color:#fff;
+overflow-x:hidden;
+line-height:1.7;
+}
+
+/* Background */
+
+body::before{
+content:"";
+position:fixed;
+width:700px;
+height:700px;
+background:#2563eb22;
+border-radius:50%;
+filter:blur(120px);
+top:-200px;
+right:-200px;
+z-index:-1;
+}
+
+body::after{
+content:"";
+position:fixed;
+width:600px;
+height:600px;
+background:#06b6d422;
+border-radius:50%;
+filter:blur(150px);
+bottom:-250px;
+left:-200px;
+z-index:-1;
+}
+
+/* Navbar */
+
+header{
+position:fixed;
+top:0;
+width:100%;
+background:rgba(8,15,30,.75);
+backdrop-filter:blur(18px);
+z-index:999;
+border-bottom:1px solid rgba(255,255,255,.08);
 }
 
 .navbar{
+max-width:1200px;
+margin:auto;
 display:flex;
 justify-content:space-between;
 align-items:center;
-padding:20px 8%;
+padding:20px;
 }
 
 .logo{
 font-size:28px;
-font-weight:bold;
+font-weight:800;
+letter-spacing:2px;
 color:#3b82f6;
 }
 
 .nav-links{
 display:flex;
+gap:35px;
 list-style:none;
-gap:25px;
 }
 
 .nav-links a{
-color:white;
+color:#fff;
 text-decoration:none;
+font-weight:500;
+transition:.3s;
 }
 
+.nav-links a:hover{
+color:#3b82f6;
+}
+
+.menu-btn{
+display:none;
+font-size:30px;
+cursor:pointer;
+}
+
+/* Hero */
+
 .hero{
-min-height:85vh;
-display:flex;
-flex-direction:column;
-justify-content:center;
+max-width:1200px;
+margin:auto;
+padding:170px 20px 100px;
+display:grid;
+grid-template-columns:1fr 1fr;
+gap:60px;
 align-items:center;
-text-align:center;
-padding:20px;
+}
+
+.badge{
+display:inline-block;
+background:#1e40af33;
+padding:10px 18px;
+border-radius:50px;
+border:1px solid #3b82f6;
+margin-bottom:25px;
+font-size:14px;
 }
 
 .hero h1{
-font-size:48px;
-margin-bottom:20px;
+font-size:64px;
+line-height:1.1;
+margin-bottom:25px;
+font-weight:800;
 }
 
 .hero p{
-max-width:700px;
 font-size:20px;
 color:#cbd5e1;
 margin-bottom:35px;
-line-height:1.7;
 }
 
-.buttons{
+.hero-buttons{
 display:flex;
-gap:15px;
+gap:18px;
 flex-wrap:wrap;
 }
 
-.btn-primary{
+.primary-btn,
+.secondary-btn{
+padding:16px 34px;
+border-radius:12px;
+text-decoration:none;
+font-weight:700;
+transition:.3s;
+}
+
+.primary-btn{
 background:#2563eb;
-color:white;
-padding:14px 28px;
-border-radius:8px;
-text-decoration:none;
-font-weight:bold;
+color:#fff;
+box-shadow:0 10px 40px rgba(37,99,235,.35);
 }
 
-.btn-secondary{
+.primary-btn:hover{
+transform:translateY(-4px);
+}
+
+.secondary-btn{
 border:2px solid #2563eb;
-color:white;
-padding:14px 28px;
-border-radius:8px;
-text-decoration:none;
-font-weight:bold;
+color:#fff;
 }
 
-.btn-primary:hover,
-.btn-secondary:hover{
-opacity:.9;
+.secondary-btn:hover{
+background:#2563eb;
 }
+
+/* Hero Card
