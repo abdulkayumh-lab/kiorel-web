@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getSupabaseAdmin } from "@/lib/supabase";
 
 const websiteSchema = z.object({
   name: z.string().trim().min(1).max(100),
@@ -47,7 +48,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Could not create website." }, { status: 500 });
   }
 
-  const { error: keyError } = await supabase.from("api_keys").insert({
+  const admin = getSupabaseAdmin();
+  const { error: keyError } = await admin.from("api_keys").insert({
     website_id: website.id,
     name: "Default browser ingestion key",
     key_prefix: keyPrefix,
