@@ -68,7 +68,7 @@ export default function Home() {
         <span className="mono">PRIVATE BETA</span>
         <h2>KIOREL is being built for real production data.</h2>
         <p>The first production test environment will validate the platform against a real website before wider release.</p>
-        <a className="button primary" href="mailto:hello@kiorel.com">Request access →</a>
+        <a className="button primary" href="#early-access">Request access →</a>
       </section>
 
       <footer>© 2026 KIOREL. First-party data infrastructure.</footer>
