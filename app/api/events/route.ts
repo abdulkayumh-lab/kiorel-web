@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { getSupabaseAdmin } from "@/lib/supabase";
 
@@ -18,7 +19,8 @@ export async function POST(request: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "Invalid event", details: parsed.error.flatten() }, { status: 400 });
 
   const supabase = getSupabaseAdmin();
-  const { data: key } = await supabase.from("api_keys").select("id, website_id, revoked_at").eq("key_hash", apiKey).is("revoked_at", null).maybeSingle();
+  const keyHash = createHash("sha256").update(apiKey).digest("hex");
+  const { data: key } = await supabase.from("api_keys").select("id, website_id, revoked_at").eq("key_hash", keyHash).is("revoked_at", null).maybeSingle();
   if (!key || key.website_id !== parsed.data.website_id) return NextResponse.json({ error: "Invalid API key" }, { status: 401 });
 
   const { data: event, error } = await supabase.from("events").insert({
@@ -30,6 +32,13 @@ export async function POST(request: NextRequest) {
     properties: parsed.data.properties
   }).select("id, event_name, event_id, received_at").single();
 
-  if (error) return NextResponse.json({ error: "Event could not be stored" }, { status: 500 });
+  if (error) {
+    if (error.code === "23505") {
+      return NextResponse.json({ ok: true, duplicate: true, event_id: parsed.data.event_id }, { status: 200 });
+    }
+    return NextResponse.json({ error: "Event could not be stored" }, { status: 500 });
+  }
+
+  await supabase.from("api_keys").update({ last_used_at: new Date().toISOString() }).eq("id", key.id);
   return NextResponse.json({ ok: true, event }, { status: 202 });
 }
