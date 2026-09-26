@@ -17,6 +17,7 @@ from PIL import Image, ImageChops, ImageEnhance
 
 from detectors.signal import cfa_diagnostics, dct_diagnostics, fft_diagnostics, noise_residual
 from provenance import collect_provenance
+from ml.schema import Calibration, calibrated_probability
 
 
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
@@ -334,14 +335,21 @@ def process_job(job: dict) -> None:
                         "&approved=eq.true&order=created_at.desc&limit=1",
                     ) or []
                     if rows:
-                        calibration = rows[0]
-                        if raw_score is not None and calibration["method"] == "identity":
-                            calibrated = max(0.0, min(1.0, float(raw_score)))
-                        elif raw_score is not None and calibration["method"] == "platt":
-                            a = float(calibration["parameters"]["a"])
-                            b = float(calibration["parameters"]["b"])
-                            z = max(-60.0, min(60.0, a * float(raw_score) + b))
-                            calibrated = 1.0 / (1.0 + math.exp(-z))
+                        candidate = rows[0]
+                        try:
+                            calibration_obj = Calibration(
+                                method=candidate["method"],
+                                parameters=candidate.get("parameters") or {},
+                                operating_points=candidate.get("operating_points") or [],
+                                validation_metrics=candidate.get("validation_metrics") or {},
+                                approved=bool(candidate.get("approved")),
+                            )
+                            if raw_score is not None:
+                                calibrated = calibrated_probability(float(raw_score), calibration_obj)
+                                calibration = candidate
+                        except (KeyError, TypeError, ValueError):
+                            calibration = None
+                            calibrated = None
 
                 metadata = {
                     "model_name": model_name,
