@@ -23,9 +23,22 @@ class Calibration:
     approved: bool
 
 
+def validate_calibration(calibration: Calibration) -> None:
+    if not calibration.approved:
+        raise ValueError("CALIBRATION_NOT_APPROVED")
+    if calibration.method not in {"identity", "platt"}:
+        raise ValueError(f"Unsupported calibration method: {calibration.method}")
+    if not calibration.operating_points:
+        raise ValueError("CALIBRATION_OPERATING_POINTS_REQUIRED")
+    for point in calibration.operating_points:
+        if "threshold" not in point:
+            raise ValueError("CALIBRATION_THRESHOLD_REQUIRED")
+
+
 def calibrated_probability(raw_score: float, calibration: Calibration) -> float | None:
     if not calibration.approved:
         return None
+    validate_calibration(calibration)
     if calibration.method == "identity":
         return max(0.0, min(1.0, raw_score))
     if calibration.method == "platt":
