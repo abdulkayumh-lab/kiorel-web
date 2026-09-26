@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import math
@@ -312,6 +313,29 @@ def process_job(job: dict) -> None:
                 "score_semantics": calibration.get("score_semantics", "unknown") if calibration else "unknown",
                 **(result.get("metadata") or {}),
             }
+
+            artifact_refs = []
+            for map_name, artifact_type in (
+                ("localization_map_b64", "trufor_localization_map"),
+                ("confidence_map_b64", "trufor_confidence_map"),
+            ):
+                encoded = result.get(map_name)
+                if encoded:
+                    payload = base64.b64decode(encoded, validate=True)
+                    artifact_key = (
+                        f"org/{media['organization_id']}/media/{media['id']}/"
+                        f"forensic/{artifact_type}.npy"
+                    )
+                    storage_put(artifact_key, payload, "application/octet-stream")
+                    add_artifact(
+                        analysis_id,
+                        artifact_type,
+                        artifact_key,
+                        "application/octet-stream",
+                        {"model_name": model_name, "model_version": model_version},
+                    )
+                    artifact_refs.append(artifact_key)
+
             rest("POST", "detector_runs", json={
                 "analysis_id": analysis_id,
                 "detector_model_id": model_id,
@@ -319,7 +343,7 @@ def process_job(job: dict) -> None:
                 "status": "complete",
                 "score": calibrated,
                 "findings": ["neural_inference_complete"],
-                "artifacts": [],
+                "artifacts": artifact_refs,
                 "metadata": metadata,
             })
             rest("POST", "evidence_items", json={
