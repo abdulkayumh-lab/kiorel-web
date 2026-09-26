@@ -10,7 +10,7 @@ def test_identity_calibration_clamps_score():
     calibration = Calibration(
         method="identity",
         parameters={},
-        operating_points=[],
+        operating_points=[{"threshold": 0.5}],
         validation_metrics={},
         approved=True,
     )
