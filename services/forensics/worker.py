@@ -27,6 +27,7 @@ MAX_ATTEMPTS = int(os.getenv("FORENSICS_MAX_ATTEMPTS", "3"))
 WORKER_ID = os.getenv("FORENSICS_WORKER_ID", socket.gethostname())
 ML_SERVICE_URL = os.getenv("FORENSICS_ML_URL", "").rstrip("/")
 ML_ENABLE_DIRE = os.getenv("FORENSICS_ML_ENABLE_DIRE", "false").lower() == "true"
+ONE_SHOT = os.getenv("FORENSICS_ONE_SHOT", "false").lower() == "true"
 
 HEADERS = {
     "apikey": SUPABASE_SERVICE_ROLE_KEY,
@@ -475,6 +476,16 @@ def process_job(job: dict) -> None:
 
 
 def main():
+    if ONE_SHOT:
+        job = claim_job()
+        if not job:
+            return
+        try:
+            process_job(job)
+        except Exception as exc:
+            fail_job(job, exc)
+        return
+
     while True:
         job = None
         try:
