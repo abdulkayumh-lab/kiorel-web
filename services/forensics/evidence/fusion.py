@@ -107,11 +107,11 @@ def fuse(evidence: list[dict], provenance: list[dict], detector_runs: list[dict]
     elif fused >= 0.95 and len(calibrated) >= 2:
         classification, confidence = "MANIPULATION_EVIDENCE_DETECTED", fused
     elif fused >= 0.80:
-        classification, confidence = "REVIEW_RECOMMENDED", fused
+        classification, confidence = "REVIEW_RECOMMENDED", (fused if len(calibrated) >= 2 else None)
     elif fused <= 0.20 and manifest:
         classification, confidence = "CONSISTENT_WITH_VERIFIED_PROVENANCE", 1 - fused
     else:
-        classification, confidence = "AUTHENTICITY_UNDETERMINED", max(fused, 1 - fused)
+        classification, confidence = "AUTHENTICITY_UNDETERMINED", (max(fused, 1 - fused) if len(calibrated) >= 2 else None)
         limitations.append("Calibrated detector evidence did not cross a decision operating point.")
 
     return FusionResult(
