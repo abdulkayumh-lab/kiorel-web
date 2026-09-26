@@ -1,6 +1,5 @@
 import io
 import os
-import tempfile
 import time
 from datetime import datetime, timezone
 
@@ -66,13 +65,10 @@ def process_job(job):
     })
 
     try:
-        analysis = rest(
-            "GET",
-            f"analyses?id=eq.{analysis_id}&select=id,media_id",
-        )[0]
+        analysis = rest("GET", f"analyses?id=eq.{analysis_id}&select=id,media_id")[0]
         media = rest(
             "GET",
-            f"media?id=eq.{analysis['media_id']}&select=id,storage_key,filename,mime_type",
+            f"media?id=eq.{analysis['media_id']}&select=id,organization_id,storage_key,filename,mime_type",
         )[0]
 
         if job_type == "ingest":
@@ -123,7 +119,7 @@ def process_job(job):
 
             output = io.BytesIO()
             heatmap.save(output, "PNG")
-            artifact_key = f"org/unknown/analysis/{analysis_id}/ela.png"
+            artifact_key = f"org/{media['organization_id']}/media/{media['id']}/forensic/ela.png"
             storage_put(artifact_key, output.getvalue(), "image/png")
 
             rest("POST", "forensic_artifacts", json={
@@ -145,8 +141,6 @@ def process_job(job):
             advance_analysis(analysis_id, "ml_analysis")
             return
 
-        # ML/evidence/reporting are intentionally explicit placeholders until
-        # calibrated models and a real queue are deployed.
         if job_type == "ml_analysis":
             complete_job(job_id)
             advance_analysis(analysis_id, "evidence_fusion")
