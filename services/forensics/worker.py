@@ -309,6 +309,7 @@ def process_job(job: dict) -> None:
                 "raw_score": raw_score,
                 "calibration_id": calibration.get("id") if calibration else None,
                 "calibration_approved": bool(calibration) if calibration else False,
+                "score_semantics": calibration.get("score_semantics", "unknown") if calibration else "unknown",
                 **(result.get("metadata") or {}),
             }
             rest("POST", "detector_runs", json={
