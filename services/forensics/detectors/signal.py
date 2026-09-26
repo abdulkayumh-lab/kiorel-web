@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 from PIL import Image
@@ -44,14 +43,7 @@ def fft_diagnostics(path: str, artifact_path: str | None = None) -> SignalFindin
     ratio = float(np.mean(high) / max(np.mean(low), 1e-8))
     if artifact_path:
         _save_heatmap(spectrum, artifact_path)
-    return SignalFinding(
-        detector="fft",
-        version=VERSION,
-        score=ratio,
-        findings=["high_frequency_spectrum_measured"],
-        metadata={"high_to_low_frequency_ratio": ratio},
-        artifact=artifact_path,
-    )
+    return SignalFinding("fft", VERSION, ratio, ["high_frequency_spectrum_measured"], {"high_to_low_frequency_ratio": ratio}, artifact_path)
 
 
 def dct_diagnostics(path: str, artifact_path: str | None = None) -> SignalFinding:
@@ -59,62 +51,43 @@ def dct_diagnostics(path: str, artifact_path: str | None = None) -> SignalFindin
     h, w = image.shape
     h -= h % 8
     w -= w % 8
+    if h < 8 or w < 8:
+        return SignalFinding("dct", VERSION, None, ["image_too_small"], {}, None)
     image = image[:h, :w]
     blocks = image.reshape(h // 8, 8, w // 8, 8).transpose(0, 2, 1, 3)
     coeff = dct(dct(blocks, axis=-1, norm="ortho"), axis=-2, norm="ortho")
     ac = np.abs(coeff[:, :, 1:, 1:])
     energy = float(np.mean(ac))
-    artifact = None
     if artifact_path:
-        block_map = np.mean(ac, axis=(2, 3))
-        _save_heatmap(block_map, artifact_path)
-        artifact = artifact_path
-    return SignalFinding(
-        detector="dct",
-        version=VERSION,
-        score=energy,
-        findings=["block_frequency_statistics_measured"],
-        metadata={"mean_ac_energy": energy, "block_size": 8},
-        artifact=artifact,
-    )
+        _save_heatmap(np.mean(ac, axis=(2, 3)), artifact_path)
+    return SignalFinding("dct", VERSION, energy, ["block_frequency_statistics_measured"], {"mean_ac_energy": energy, "block_size": 8}, artifact_path)
 
 
 def noise_residual(path: str, artifact_path: str | None = None) -> SignalFinding:
     image = _gray(path)
-    smooth = Image.fromarray((image * 255).astype(np.uint8)).filter(Image.Filter.MedianFilter(3)) if False else None
     padded = np.pad(image, 1, mode="reflect")
     center = padded[1:-1, 1:-1]
     neighborhood = (
-        padded[:-2, :-2] + padded[:-2, 1:-1] + padded[:-2, 2:] +
-        padded[1:-1, :-2] + padded[1:-1, 2:] +
-        padded[2:, :-2] + padded[2:, 1:-1] + padded[2:, 2:]
+        padded[:-2, :-2] + padded[:-2, 1:-1] + padded[:-2, 2:]
+        + padded[1:-1, :-2] + padded[1:-1, 2:]
+        + padded[2:, :-2] + padded[2:, 1:-1] + padded[2:, 2:]
     ) / 8.0
     residual = np.abs(center - neighborhood)
     rms = float(np.sqrt(np.mean(residual ** 2)))
     if artifact_path:
         _save_heatmap(residual, artifact_path)
-    return SignalFinding(
-        detector="noise_residual",
-        version=VERSION,
-        score=rms,
-        findings=["noise_residual_measured"],
-        metadata={"residual_rms": rms},
-        artifact=artifact_path,
-    )
+    return SignalFinding("noise_residual", VERSION, rms, ["noise_residual_measured"], {"residual_rms": rms}, artifact_path)
 
 
 def cfa_diagnostics(path: str) -> SignalFinding:
     rgb = np.asarray(Image.open(path).convert("RGB"), dtype=np.float32) / 255.0
-    if rgb.shape[0] < 4 or rgb.shape[1] < 4:
+    h, w = rgb.shape[:2]
+    h -= h % 2
+    w -= w % 2
+    if h < 2 or w < 2:
         return SignalFinding("cfa", VERSION, None, ["image_too_small"], {}, None)
-    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    r, b = rgb[:h, :w, 0], rgb[:h, :w, 2]
     rg = float(np.mean(np.abs(r[::2, ::2] - r[1::2, 1::2])))
     bg = float(np.mean(np.abs(b[::2, ::2] - b[1::2, 1::2])))
     score = float((rg + bg) / 2)
-    return SignalFinding(
-        detector="cfa",
-        version=VERSION,
-        score=score,
-        findings=["channel_sampling_consistency_measured"],
-        metadata={"red_diagonal_delta": rg, "blue_diagonal_delta": bg},
-    )
+    return SignalFinding("cfa", VERSION, score, ["channel_sampling_consistency_measured"], {"red_diagonal_delta": rg, "blue_diagonal_delta": bg})
