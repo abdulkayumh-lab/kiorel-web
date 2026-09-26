@@ -16,10 +16,11 @@ export default async function ForensicAnalysisPage({ params }: { params: Promise
 
   if (!analysis) notFound();
 
-  const [{ data: evidence }, { data: provenance }, { data: artifacts }] = await Promise.all([
+  const [{ data: evidence }, { data: provenance }, { data: artifacts }, { data: detectorRuns }] = await Promise.all([
     supabase.from("evidence_items").select("*").eq("analysis_id", analysisId).order("created_at"),
     supabase.from("provenance_records").select("*").eq("analysis_id", analysisId).order("created_at"),
     supabase.from("forensic_artifacts").select("*").eq("analysis_id", analysisId).order("created_at"),
+    supabase.from("detector_runs").select("*").eq("analysis_id", analysisId).order("created_at"),
   ]);
 
   return (
@@ -47,21 +48,42 @@ export default async function ForensicAnalysisPage({ params }: { params: Promise
             <span className="card-index">01 / PROVENANCE</span>
             <h2>Provenance</h2>
             {provenance?.length ? provenance.map((item) => (
-              <p key={item.id}><strong>{item.source}</strong>: {item.status}</p>
+              <div key={item.id}>
+                <p><strong>{item.source}</strong>: {item.status}</p>
+                {item.source === "c2pa" && item.status === "manifest_found" && (
+                  <p className="mono">C2PA manifest detected and parsed.</p>
+                )}
+              </div>
             )) : <p>No provenance results yet.</p>}
           </article>
+
           <article className="card">
-            <span className="card-index">02 / EVIDENCE</span>
+            <span className="card-index">02 / SIGNAL FORENSICS</span>
+            <h2>Detector runs</h2>
+            {detectorRuns?.length ? detectorRuns.map((run) => (
+              <div key={run.id}>
+                <p><strong>{run.detector_name}</strong>{run.score !== null ? " · score " + Number(run.score).toPrecision(5) : ""}</p>
+              </div>
+            )) : <p>Signal detectors will appear as workers complete.</p>}
+          </article>
+
+          <article className="card">
+            <span className="card-index">03 / EVIDENCE</span>
             <h2>Evidence</h2>
             {evidence?.length ? evidence.map((item) => (
               <p key={item.id}><strong>{item.detector}</strong>: {item.finding}</p>
             )) : <p>Evidence will appear as workers complete.</p>}
           </article>
+
           <article className="card">
-            <span className="card-index">03 / ARTIFACTS</span>
-            <h2>Artifacts</h2>
+            <span className="card-index">04 / ARTIFACTS</span>
+            <h2>Forensic maps</h2>
             {artifacts?.length ? artifacts.map((item) => (
-              <p key={item.id}>{item.artifact_type}</p>
+              <p key={item.id}>
+                <Link href={"/api/forensics/artifacts/" + item.id} target="_blank">
+                  {item.artifact_type} heatmap
+                </Link>
+              </p>
             )) : <p>No forensic artifacts yet.</p>}
           </article>
         </div>
