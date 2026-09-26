@@ -1,21 +1,37 @@
-# KIOREL Forensics Service
+# KIOREL Forensics Data Plane
 
-This service is the compute plane for media provenance and forensic analysis.
-
-The Next.js application remains the control plane. It creates media and analysis records, then a worker runtime consumes analysis jobs.
+This service is the forensic worker/data-plane foundation for KIOREL.
 
 ## Pipeline
 
-ingest -> provenance -> pixel analysis -> ML analysis -> evidence fusion -> reporting
+1. Ingest and SHA-256 verification
+2. C2PA + ExifTool provenance inspection
+3. Signal-domain diagnostics: ELA, FFT, DCT, noise residual, CFA
+4. Neural inference boundary
+5. Evidence fusion
+6. Report generation
 
-The first implementation should remain evidence-first. Detector output is probabilistic and must not be represented as proof of authenticity or AI generation.
+## Neural inference
 
-## Runtime
+KIOREL keeps GPU inference separate from the Supabase polling worker.
 
-- Python 3.12+
-- FastAPI for service health/control endpoints
-- Redis-compatible queue for jobs
-- Supabase/PostgreSQL for durable state
-- S3-compatible object storage for media/artifacts
-- CPU workers for metadata/classical analysis
-- GPU workers for neural detectors
+The current adapter targets the official TruFor inference contract. TruFor documents image-level score, localization and confidence outputs, and provides a Docker inference path with pinned model weights.
+
+KIOREL does not bundle third-party weights into the repository. Set TRUFOR_COMMAND in the GPU inference deployment to the approved, pinned runtime command and set TRUFOR_MODEL_VERSION to the exact model/checkpoint identifier.
+
+A model may be registered in detector_models, but it must not be treated as calibrated evidence until an approved calibration row exists in detector_calibrations.
+
+### Calibration contract
+
+Supported calibration methods currently include:
+
+- identity
+- platt
+
+Every approved calibration should record the dataset/version, validation metrics, operating points, and calibration version.
+
+### Forensic limitation
+
+TruFor is an image-forgery localization system, not universal proof that an image is AI-generated. KIOREL therefore stores its output as model evidence and keeps the final assessment separate from any single detector score.
+
+Runtime, model and checkpoint versions are recorded because inference results can vary across software and CUDA environments.
