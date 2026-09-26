@@ -6,6 +6,19 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 const MAX_BYTES = 20 * 1024 * 1024;
 const ALLOWED = new Set(["image/jpeg", "image/png", "image/webp", "image/tiff"]);
 
+function hasValidSignature(bytes: Buffer, mime: string) {
+  if (mime === "image/jpeg") return bytes.length >= 3 && bytes.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]));
+  if (mime === "image/png") return bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  if (mime === "image/webp") return bytes.length >= 12 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP";
+  if (mime === "image/tiff") {
+    return bytes.length >= 4 && (
+      bytes.subarray(0, 4).equals(Buffer.from([0x49, 0x49, 0x2a, 0x00])) ||
+      bytes.subarray(0, 4).equals(Buffer.from([0x4d, 0x4d, 0x00, 0x2a]))
+    );
+  }
+  return false;
+}
+
 export async function POST(request: Request) {
   const supabase = await createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -13,36 +26,30 @@ export async function POST(request: Request) {
 
   const form = await request.formData().catch(() => null);
   const file = form?.get("file");
-  if (!(file instanceof File)) {
-    return NextResponse.json({ error: "Image file is required." }, { status: 400 });
-  }
-  if (!ALLOWED.has(file.type)) {
-    return NextResponse.json({ error: "Unsupported image type." }, { status: 415 });
-  }
-  if (file.size > MAX_BYTES) {
-    return NextResponse.json({ error: "Image exceeds the 20 MB limit." }, { status: 413 });
-  }
+  if (!(file instanceof File)) return NextResponse.json({ error: "Image file is required." }, { status: 400 });
+  if (!ALLOWED.has(file.type)) return NextResponse.json({ error: "Unsupported image type." }, { status: 415 });
+  if (file.size > MAX_BYTES) return NextResponse.json({ error: "Image exceeds the 20 MB limit." }, { status: 413 });
 
   const { data: organizationId, error: workspaceError } = await supabase.rpc("ensure_workspace", {
     workspace_name: "KIOREL Workspace",
   });
-  if (workspaceError || !organizationId) {
-    return NextResponse.json({ error: "Could not initialize workspace." }, { status: 500 });
-  }
+  if (workspaceError || !organizationId) return NextResponse.json({ error: "Could not initialize workspace." }, { status: 500 });
 
   const bytes = Buffer.from(await file.arrayBuffer());
+  if (!hasValidSignature(bytes, file.type)) {
+    return NextResponse.json({ error: "The file signature does not match its declared image type." }, { status: 415 });
+  }
+
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   const mediaId = randomUUID();
   const storageKey = `org/${organizationId}/media/${mediaId}/original`;
-
   const admin = getSupabaseAdmin();
+
   const { error: uploadError } = await admin.storage.from("kiorel-media").upload(storageKey, bytes, {
     contentType: file.type,
     upsert: false,
   });
-  if (uploadError) {
-    return NextResponse.json({ error: "Could not store media. Create the kiorel-media storage bucket first." }, { status: 500 });
-  }
+  if (uploadError) return NextResponse.json({ error: "Could not store media. Run the storage migration first." }, { status: 500 });
 
   const { data: media, error: mediaError } = await admin.from("media").insert({
     id: mediaId,
