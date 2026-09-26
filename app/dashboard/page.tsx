@@ -20,6 +20,21 @@ export default async function DashboardPage() {
         .order("created_at", { ascending: false })
     : { data: [] };
 
+  const { count: forensicCount } = organizationId
+    ? await supabase
+        .from("media")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", organizationId)
+    : { count: 0 };
+
+  const { count: processingCount } = organizationId
+    ? await supabase
+        .from("analyses")
+        .select("id,media!inner(organization_id)", { count: "exact", head: true })
+        .eq("media.organization_id", organizationId)
+        .in("status", ["queued", "ingesting", "provenance", "pixel_analysis", "ml_analysis", "evidence_fusion", "reporting"])
+    : { count: 0 };
+
   return (
     <main className="dashboard-shell">
       <header className="dashboard-nav">
@@ -36,7 +51,7 @@ export default async function DashboardPage() {
         <span className="mono auth-label">KIOREL CONTROL PLANE</span>
         <h1>Welcome to KIOREL.</h1>
         <p className="lead">
-          Manage your websites, event collection, and tracking tests from one control plane.
+          Manage websites, event collection, media forensics, and diagnostics from one control plane.
         </p>
 
         <div className="status-row">
@@ -50,10 +65,38 @@ export default async function DashboardPage() {
 
         <div className="dashboard-section-head">
           <div>
+            <span className="mono">MEDIA INTELLIGENCE</span>
+            <h2>Forensic analysis</h2>
+          </div>
+          <Link className="button primary" href="/dashboard/forensics/upload">
+            Analyze media
+          </Link>
+        </div>
+
+        <div className="dashboard-grid">
+          <Link className="card" href="/dashboard/forensics">
+            <span className="card-index">01 / FORENSICS</span>
+            <h2>{forensicCount ?? 0} media records</h2>
+            <p>Investigate provenance, manipulation indicators, and synthetic-media evidence.</p>
+          </Link>
+          <article className="card">
+            <span className="card-index">02 / PIPELINE</span>
+            <h2>{processingCount ?? 0} processing</h2>
+            <p>Server-side analysis jobs move through provenance, pixel, ML, evidence, and reporting stages.</p>
+          </article>
+          <article className="card">
+            <span className="card-index">03 / EVIDENCE</span>
+            <h2>Evidence-first</h2>
+            <p>KIOREL keeps provenance, detector findings, artifacts, and assessment confidence separate.</p>
+          </article>
+        </div>
+
+        <div className="dashboard-section-head">
+          <div>
             <span className="mono">WEBSITES</span>
             <h2>Your connected sites</h2>
           </div>
-          <Link className="button primary" href="/dashboard/websites/new">
+          <Link className="button secondary" href="/dashboard/websites/new">
             Add website
           </Link>
         </div>
@@ -79,8 +122,8 @@ export default async function DashboardPage() {
 
         <div className="dashboard-section-head">
           <div>
-            <span className="mono">NEXT STEPS</span>
-            <h2>Event pipeline</h2>
+            <span className="mono">PLATFORM</span>
+            <h2>Core pipeline</h2>
           </div>
         </div>
 
@@ -98,7 +141,7 @@ export default async function DashboardPage() {
           <article className="card">
             <span className="card-index">03 / TEST</span>
             <h2>Test ingestion</h2>
-            <p>Validate the event API with the KIOREL test site before connecting BirdsAviary.net.</p>
+            <p>Validate the event API with the KIOREL test site before connecting production traffic.</p>
           </article>
         </div>
       </section>
