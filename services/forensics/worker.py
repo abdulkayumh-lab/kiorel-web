@@ -1,16 +1,28 @@
+from __future__ import annotations
+
+import hashlib
 import io
+import json
 import os
+import socket
+import tempfile
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 from PIL import Image, ImageChops, ImageEnhance
+
+from detectors.signal import cfa_diagnostics, dct_diagnostics, fft_diagnostics, noise_residual
+from provenance import collect_provenance
 
 
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 BUCKET = os.getenv("FORENSICS_BUCKET", "kiorel-media")
 POLL_SECONDS = float(os.getenv("FORENSICS_POLL_SECONDS", "3"))
+MAX_ATTEMPTS = int(os.getenv("FORENSICS_MAX_ATTEMPTS", "3"))
+WORKER_ID = os.getenv("FORENSICS_WORKER_ID", socket.gethostname())
 
 HEADERS = {
     "apikey": SUPABASE_SERVICE_ROLE_KEY,
@@ -20,7 +32,7 @@ HEADERS = {
 
 
 def rest(method: str, path: str, **kwargs):
-    with httpx.Client(timeout=60) as client:
+    with httpx.Client(timeout=120) as client:
         response = client.request(method, f"{SUPABASE_URL}/rest/v1/{path}", headers=HEADERS, **kwargs)
         response.raise_for_status()
         return response.json() if response.content else None
@@ -44,140 +56,27 @@ def storage_put(key: str, data: bytes, content_type: str) -> None:
             headers=headers,
             content=data,
         )
-        if response.status_code == 409:
-            return
-        response.raise_for_status()
+        if response.status_code != 409:
+            response.raise_for_status()
 
 
-def now():
+def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def process_job(job):
-    job_id = job["id"]
-    analysis_id = job["analysis_id"]
-    job_type = job["job_type"]
-
-    rest("PATCH", f"analysis_jobs?id=eq.{job_id}", json={
-        "status": "running",
-        "attempts": job["attempts"] + 1,
-        "started_at": now(),
+def claim_job():
+    jobs = rest("POST", "rpc/claim_forensics_job", json={
+        "p_worker_id": WORKER_ID,
+        "p_stale_after_seconds": 900,
     })
-
-    try:
-        analysis = rest("GET", f"analyses?id=eq.{analysis_id}&select=id,media_id")[0]
-        media = rest(
-            "GET",
-            f"media?id=eq.{analysis['media_id']}&select=id,organization_id,storage_key,filename,mime_type",
-        )[0]
-
-        if job_type == "ingest":
-            data = storage_get(media["storage_key"])
-            image = Image.open(io.BytesIO(data))
-            rest("PATCH", f"media?id=eq.{media['id']}", json={
-                "width": image.width,
-                "height": image.height,
-            })
-            complete_job(job_id)
-            advance_analysis(analysis_id, "provenance")
-            return
-
-        if job_type == "provenance":
-            data = storage_get(media["storage_key"])
-            image = Image.open(io.BytesIO(data))
-            metadata = {
-                "format": image.format,
-                "mode": image.mode,
-                "size": list(image.size),
-                "has_exif": bool(image.getexif()),
-            }
-            rest("POST", "metadata_records", json={
-                "analysis_id": analysis_id,
-                "source": "pillow",
-                "metadata": metadata,
-            })
-            rest("POST", "provenance_records", json={
-                "analysis_id": analysis_id,
-                "source": "metadata",
-                "status": "inspected",
-                "details": {"c2pa": "not_checked_by_worker"},
-            })
-            complete_job(job_id)
-            advance_analysis(analysis_id, "pixel_analysis")
-            return
-
-        if job_type == "pixel_analysis":
-            data = storage_get(media["storage_key"])
-            image = Image.open(io.BytesIO(data)).convert("RGB")
-            buffer = io.BytesIO()
-            image.save(buffer, "JPEG", quality=90)
-            recompressed = Image.open(io.BytesIO(buffer.getvalue())).convert("RGB")
-            diff = ImageChops.difference(image, recompressed)
-            max_diff = max(channel[1] for channel in diff.getextrema())
-            scale = 255.0 / max(max_diff, 1)
-            heatmap = ImageEnhance.Brightness(diff).enhance(scale)
-
-            output = io.BytesIO()
-            heatmap.save(output, "PNG")
-            artifact_key = f"org/{media['organization_id']}/media/{media['id']}/forensic/ela.png"
-            storage_put(artifact_key, output.getvalue(), "image/png")
-
-            rest("POST", "forensic_artifacts", json={
-                "analysis_id": analysis_id,
-                "artifact_type": "ela",
-                "storage_key": artifact_key,
-                "mime_type": "image/png",
-                "metadata": {"quality": 90, "max_channel_difference": max_diff},
-            })
-            rest("POST", "evidence_items", json={
-                "analysis_id": analysis_id,
-                "category": "pixel",
-                "detector": "ela",
-                "finding": "recompression_delta_available",
-                "strength": "informational",
-                "details": {"max_channel_difference": max_diff},
-            })
-            complete_job(job_id)
-            advance_analysis(analysis_id, "ml_analysis")
-            return
-
-        if job_type == "ml_analysis":
-            complete_job(job_id)
-            advance_analysis(analysis_id, "evidence_fusion")
-            return
-
-        if job_type == "evidence_fusion":
-            rest("PATCH", f"analyses?id=eq.{analysis_id}", json={
-                "status": "reporting",
-                "assessment": "AUTHENTICITY_UNDETERMINED",
-                "confidence": None,
-            })
-            complete_job(job_id)
-            return
-
-        if job_type == "reporting":
-            rest("PATCH", f"analyses?id=eq.{analysis_id}", json={
-                "status": "complete",
-                "completed_at": now(),
-            })
-            complete_job(job_id)
-            return
-
-        raise ValueError(f"Unsupported job type: {job_type}")
-
-    except Exception as exc:
-        rest("PATCH", f"analysis_jobs?id=eq.{job_id}", json={
-            "status": "failed",
-            "error_message": str(exc)[:1000],
-        })
-        rest("PATCH", f"analyses?id=eq.{analysis_id}", json={
-            "status": "failed",
-            "error_code": "WORKER_ERROR",
-            "error_message": str(exc)[:1000],
-        })
+    return jobs[0] if jobs else None
 
 
-def complete_job(job_id: str):
+def set_analysis(analysis_id: str, **fields) -> None:
+    rest("PATCH", f"analyses?id=eq.{analysis_id}", json=fields)
+
+
+def complete_job(job_id: str) -> None:
     rest("PATCH", f"analysis_jobs?id=eq.{job_id}", json={
         "status": "complete",
         "progress": 100,
@@ -185,20 +84,271 @@ def complete_job(job_id: str):
     })
 
 
-def advance_analysis(analysis_id: str, status: str):
-    rest("PATCH", f"analyses?id=eq.{analysis_id}", json={"status": status})
+def fail_job(job: dict, exc: Exception) -> None:
+    message = str(exc)[:1000]
+    if int(job["attempts"]) < MAX_ATTEMPTS:
+        rest("PATCH", f"analysis_jobs?id=eq.{job['id']}", json={
+            "status": "queued",
+            "error_message": message,
+        })
+    else:
+        rest("PATCH", f"analysis_jobs?id=eq.{job['id']}", json={
+            "status": "failed",
+            "error_message": message,
+        })
+        set_analysis(
+            job["analysis_id"],
+            status="failed",
+            error_code="WORKER_ERROR",
+            error_message=message,
+        )
+
+
+def add_artifact(analysis_id: str, artifact_type: str, key: str, mime_type: str, metadata: dict) -> None:
+    existing = rest(
+        "GET",
+        "forensic_artifacts"
+        f"?analysis_id=eq.{analysis_id}&artifact_type=eq.{artifact_type}&storage_key=eq.{key}&select=id&limit=1",
+    )
+    if not existing:
+        rest("POST", "forensic_artifacts", json={
+            "analysis_id": analysis_id,
+            "artifact_type": artifact_type,
+            "storage_key": key,
+            "mime_type": mime_type,
+            "metadata": metadata,
+        })
+
+
+def add_evidence(analysis_id: str, category: str, detector: str, finding: str, score, strength: str, details: dict) -> None:
+    rest("POST", "evidence_items", json={
+        "analysis_id": analysis_id,
+        "category": category,
+        "detector": detector,
+        "finding": finding,
+        "score": score,
+        "strength": strength,
+        "details": details,
+    })
+
+
+def add_detector_run(analysis_id: str, detector, score, findings, artifacts, metadata) -> None:
+    rest("POST", "detector_runs", json={
+        "analysis_id": analysis_id,
+        "detector_name": detector,
+        "status": "complete",
+        "score": score,
+        "findings": findings,
+        "artifacts": artifacts,
+        "metadata": metadata,
+    })
+
+
+def process_job(job: dict) -> None:
+    analysis_id = job["analysis_id"]
+    analysis = rest("GET", f"analyses?id=eq.{analysis_id}&select=id,media_id")[0]
+    media = rest(
+        "GET",
+        f"media?id=eq.{analysis['media_id']}"
+        "&select=id,organization_id,storage_key,filename,mime_type,sha256,width,height",
+    )[0]
+
+    if job["job_type"] == "ingest":
+        data = storage_get(media["storage_key"])
+        digest = hashlib.sha256(data).hexdigest()
+        if digest != media["sha256"]:
+            raise ValueError("MEDIA_HASH_MISMATCH")
+        with Image.open(io.BytesIO(data)) as image:
+            image.verify()
+        with Image.open(io.BytesIO(data)) as image:
+            set_analysis(analysis_id, started_at=now())
+            rest("PATCH", f"media?id=eq.{media['id']}", json={
+                "width": image.width,
+                "height": image.height,
+            })
+        complete_job(job["id"])
+        set_analysis(analysis_id, status="provenance")
+        return
+
+    if job["job_type"] == "provenance":
+        data = storage_get(media["storage_key"])
+        with tempfile.NamedTemporaryFile(suffix=Path(media["filename"] or "image.jpg").suffix or ".jpg") as tmp:
+            tmp.write(data)
+            tmp.flush()
+            provenance = collect_provenance(tmp.name)
+
+        c2pa = provenance["c2pa"]
+        exif = provenance["exiftool"]
+        rest("POST", "metadata_records", json={
+            "analysis_id": analysis_id,
+            "source": "exiftool+c2pa",
+            "metadata": provenance,
+        })
+        rest("POST", "provenance_records", json={
+            "analysis_id": analysis_id,
+            "source": "c2pa",
+            "status": c2pa.get("status", "unavailable"),
+            "details": c2pa,
+        })
+        rest("POST", "provenance_records", json={
+            "analysis_id": analysis_id,
+            "source": "exiftool",
+            "status": "inspected" if exif.get("available") else "unavailable",
+            "details": exif,
+        })
+        if c2pa.get("status") == "manifest_found":
+            add_evidence(analysis_id, "provenance", "c2pa", "c2pa_manifest_present", None, "strong", {
+                "status": c2pa.get("status"),
+            })
+        elif c2pa.get("status") == "no_manifest":
+            add_evidence(analysis_id, "provenance", "c2pa", "no_c2pa_manifest_found", None, "informational", {})
+        complete_job(job["id"])
+        set_analysis(analysis_id, status="pixel_analysis")
+        return
+
+    if job["job_type"] == "pixel_analysis":
+        data = storage_get(media["storage_key"])
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / (Path(media["filename"] or "image.jpg").name)
+            source.write_bytes(data)
+
+            image = Image.open(io.BytesIO(data)).convert("RGB")
+            buffer = io.BytesIO()
+            image.save(buffer, "JPEG", quality=90)
+            recompressed = Image.open(io.BytesIO(buffer.getvalue())).convert("RGB")
+            diff = ImageChops.difference(image, recompressed)
+            max_diff = max(channel[1] for channel in diff.getextrema())
+            mean_diff = float(sum(sum(channel) for channel in diff.getdata()) / (image.width * image.height * 3))
+            scale = 255.0 / max(max_diff, 1)
+            heatmap = ImageEnhance.Brightness(diff).enhance(scale)
+            ela_path = Path(directory) / "ela.png"
+            heatmap.save(ela_path, "PNG")
+
+            detectors = [
+                ("ela", float(mean_diff), ["recompression_delta_available"],
+                 {"mean_absolute_difference": mean_diff, "max_channel_difference": max_diff}, ela_path),
+            ]
+
+            fft_path = Path(directory) / "fft.png"
+            fft = fft_diagnostics(str(source), str(fft_path))
+            detectors.append(("fft", fft.score, fft.findings, fft.metadata, fft_path))
+
+            dct_path = Path(directory) / "dct.png"
+            dct = dct_diagnostics(str(source), str(dct_path))
+            detectors.append(("dct", dct.score, dct.findings, dct.metadata, dct_path))
+
+            noise_path = Path(directory) / "noise_residual.png"
+            noise = noise_residual(str(source), str(noise_path))
+            detectors.append(("noise_residual", noise.score, noise.findings, noise.metadata, noise_path))
+
+            cfa = cfa_diagnostics(str(source))
+            detectors.append(("cfa", cfa.score, cfa.findings, cfa.metadata, None))
+
+            for detector, score, findings, metadata, artifact in detectors:
+                artifact_key = None
+                artifact_refs = []
+                if artifact is not None and artifact.exists():
+                    artifact_key = (
+                        f"org/{media['organization_id']}/media/{media['id']}/"
+                        f"forensic/{detector}.png"
+                    )
+                    storage_put(artifact_key, artifact.read_bytes(), "image/png")
+                    add_artifact(analysis_id, detector, artifact_key, "image/png", metadata)
+                    artifact_refs.append(artifact_key)
+                add_detector_run(analysis_id, detector, score, findings, artifact_refs, {
+                    "version": "1.0.0",
+                    **metadata,
+                })
+                add_evidence(
+                    analysis_id,
+                    "pixel",
+                    detector,
+                    findings[0] if findings else "measurement_complete",
+                    score,
+                    "informational",
+                    metadata,
+                )
+
+        complete_job(job["id"])
+        set_analysis(analysis_id, status="ml_analysis")
+        return
+
+    if job["job_type"] == "ml_analysis":
+        # Reserved for calibrated neural detectors (e.g. TruFor/DIRE/Universal Fake Detector).
+        # No uncalibrated model score is emitted as evidence.
+        add_evidence(
+            analysis_id,
+            "ml",
+            "model_registry",
+            "neural_detector_stage_not_enabled",
+            None,
+            "informational",
+            {"reason": "requires validated weights, calibration data, and operating points"},
+        )
+        complete_job(job["id"])
+        set_analysis(analysis_id, status="evidence_fusion")
+        return
+
+    if job["job_type"] == "evidence_fusion":
+        evidence = rest(
+            "GET",
+            f"evidence_items?analysis_id=eq.{analysis_id}"
+            "&select=category,detector,finding,score,strength,details",
+        ) or []
+        provenance = rest(
+            "GET",
+            f"provenance_records?analysis_id=eq.{analysis_id}"
+            "&select=source,status,details",
+        ) or []
+        limitations = [
+            "Signal-domain measurements are diagnostic evidence, not standalone proof of manipulation or origin.",
+            "Neural detector stage is not yet calibrated or enabled.",
+        ]
+        if not provenance:
+            limitations.append("No provenance record was produced.")
+        set_analysis(
+            analysis_id,
+            status="reporting",
+            assessment="AUTHENTICITY_UNDETERMINED" if evidence else "INSUFFICIENT_EVIDENCE",
+            confidence=None,
+        )
+        rest("POST", "reports", json={
+            "analysis_id": analysis_id,
+            "format": "json",
+            "report": {
+                "pipeline_version": "1.1.0",
+                "assessment": "AUTHENTICITY_UNDETERMINED" if evidence else "INSUFFICIENT_EVIDENCE",
+                "confidence": None,
+                "evidence_count": len(evidence),
+                "provenance_count": len(provenance),
+                "limitations": limitations,
+            },
+        })
+        complete_job(job["id"])
+        return
+
+    if job["job_type"] == "reporting":
+        set_analysis(analysis_id, status="complete", completed_at=now())
+        complete_job(job["id"])
+        return
+
+    raise ValueError(f"Unsupported job type: {job['job_type']}")
 
 
 def main():
     while True:
-        jobs = rest(
-            "GET",
-            "analysis_jobs?status=eq.queued&select=id,analysis_id,job_type,attempts,created_at&order=created_at.asc&limit=1",
-        )
-        if jobs:
-            process_job(jobs[0])
-        else:
-            time.sleep(POLL_SECONDS)
+        job = None
+        try:
+            job = claim_job()
+            if job:
+                process_job(job)
+            else:
+                time.sleep(POLL_SECONDS)
+        except Exception as exc:
+            if job:
+                fail_job(job, exc)
+            else:
+                time.sleep(POLL_SECONDS)
 
 
 if __name__ == "__main__":
