@@ -51,3 +51,15 @@ def test_dire_requires_deployment_runtime(monkeypatch):
 def test_forensic_map_serializes_to_png():
     payload = map_to_png(np.array([[0.0, 1.0], [0.5, 0.25]], dtype=np.float32))
     assert payload.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_approved_calibration_requires_operating_point():
+    calibration = Calibration(
+        method="identity",
+        parameters={},
+        operating_points=[],
+        validation_metrics={},
+        approved=True,
+    )
+    with pytest.raises(ValueError, match="CALIBRATION_OPERATING_POINTS_REQUIRED"):
+        calibrated_probability(0.5, calibration)
