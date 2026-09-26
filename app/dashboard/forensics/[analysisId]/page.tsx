@@ -16,11 +16,12 @@ export default async function ForensicAnalysisPage({ params }: { params: Promise
 
   if (!analysis) notFound();
 
-  const [{ data: evidence }, { data: provenance }, { data: artifacts }, { data: detectorRuns }] = await Promise.all([
+  const [{ data: evidence }, { data: provenance }, { data: artifacts }, { data: detectorRuns }, { data: fusionRuns }] = await Promise.all([
     supabase.from("evidence_items").select("*").eq("analysis_id", analysisId).order("created_at"),
     supabase.from("provenance_records").select("*").eq("analysis_id", analysisId).order("created_at"),
     supabase.from("forensic_artifacts").select("*").eq("analysis_id", analysisId).order("created_at"),
     supabase.from("detector_runs").select("*").eq("analysis_id", analysisId).order("created_at"),
+    supabase.from("fusion_runs").select("*").eq("analysis_id", analysisId).order("created_at", { ascending: false }),
   ]);
 
   return (
@@ -76,7 +77,20 @@ export default async function ForensicAnalysisPage({ params }: { params: Promise
           </article>
 
           <article className="card">
-            <span className="card-index">04 / ARTIFACTS</span>
+            <span className="card-index">04 / EVIDENCE FUSION</span>
+            <h2>Fusion result</h2>
+            {fusionRuns?.[0] ? (
+              <>
+                <p><strong>{fusionRuns[0].classification}</strong></p>
+                {fusionRuns[0].confidence !== null && <p>Confidence: {Math.round(Number(fusionRuns[0].confidence) * 100)}%</p>}
+                <p className="mono">Snapshot: {fusionRuns[0].evidence_snapshot_hash}</p>
+                {fusionRuns[0].limitations?.length ? <p>{fusionRuns[0].limitations.join(" ")}</p> : null}
+              </>
+            ) : <p>Fusion will appear after all evidence stages complete.</p>}
+          </article>
+
+          <article className="card">
+            <span className="card-index">05 / ARTIFACTS</span>
             <h2>Forensic maps</h2>
             {artifacts?.length ? artifacts.map((item) => (
               <p key={item.id}>
