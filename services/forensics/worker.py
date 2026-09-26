@@ -345,40 +345,62 @@ def process_job(job: dict) -> None:
         return
 
     if job["job_type"] == "evidence_fusion":
+        from evidence.fusion import FUSION_VERSION, fuse
+
         evidence = rest(
             "GET",
             f"evidence_items?analysis_id=eq.{analysis_id}"
-            "&select=category,detector,finding,score,strength,details",
+            "&select=category,detector,finding,score,strength,details,created_at",
         ) or []
         provenance = rest(
             "GET",
             f"provenance_records?analysis_id=eq.{analysis_id}"
-            "&select=source,status,details",
+            "&select=source,status,details,created_at",
         ) or []
-        limitations = [
-            "Signal-domain measurements are diagnostic evidence, not standalone proof of manipulation or origin.",
-            "Neural detector stage is not yet calibrated or enabled.",
-        ]
-        if not provenance:
-            limitations.append("No provenance record was produced.")
-        set_analysis(
-            analysis_id,
-            status="reporting",
-            assessment="AUTHENTICITY_UNDETERMINED" if evidence else "INSUFFICIENT_EVIDENCE",
-            confidence=None,
+        detector_runs = rest(
+            "GET",
+            f"detector_runs?analysis_id=eq.{analysis_id}"
+            "&select=detector_name,status,score,findings,artifacts,metadata,created_at",
+        ) or []
+
+        result = fuse(
+            evidence=evidence,
+            provenance=provenance,
+            detector_runs=detector_runs,
         )
+
+        rest("POST", "fusion_runs", json={
+            "analysis_id": analysis_id,
+            "fusion_version": FUSION_VERSION,
+            "evidence_snapshot_hash": result.evidence_snapshot_hash,
+            "classification": result.classification,
+            "confidence": result.confidence,
+            "components": result.components,
+            "limitations": result.limitations,
+            "decision_basis": result.decision_basis,
+        })
+
         rest("POST", "reports", json={
             "analysis_id": analysis_id,
             "format": "json",
             "report": {
-                "pipeline_version": "1.1.0",
-                "assessment": "AUTHENTICITY_UNDETERMINED" if evidence else "INSUFFICIENT_EVIDENCE",
-                "confidence": None,
-                "evidence_count": len(evidence),
-                "provenance_count": len(provenance),
-                "limitations": limitations,
+                "pipeline_version": "2.0.0",
+                "fusion_version": FUSION_VERSION,
+                "assessment": result.classification,
+                "confidence": result.confidence,
+                "evidence_snapshot_hash": result.evidence_snapshot_hash,
+                "decision_basis": result.decision_basis,
+                "components": result.components,
+                "limitations": result.limitations,
             },
         })
+
+        set_analysis(
+            analysis_id,
+            status="reporting",
+            assessment=result.classification,
+            confidence=result.confidence,
+        )
         complete_job(job["id"])
         return
 
