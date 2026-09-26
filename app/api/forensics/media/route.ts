@@ -69,7 +69,7 @@ export async function POST(request: Request) {
   const { data: analysis, error: analysisError } = await admin.from("analyses").insert({
     media_id: media.id,
     status: "queued",
-    pipeline_version: "1.0.0",
+    pipeline_version: "1.1.0",
   }).select("id,status").single();
 
   if (analysisError || !analysis) {
