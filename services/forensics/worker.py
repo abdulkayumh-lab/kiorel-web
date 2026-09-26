@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import math
 import json
 import os
 import socket
@@ -23,6 +24,7 @@ BUCKET = os.getenv("FORENSICS_BUCKET", "kiorel-media")
 POLL_SECONDS = float(os.getenv("FORENSICS_POLL_SECONDS", "3"))
 MAX_ATTEMPTS = int(os.getenv("FORENSICS_MAX_ATTEMPTS", "3"))
 WORKER_ID = os.getenv("FORENSICS_WORKER_ID", socket.gethostname())
+ML_SERVICE_URL = os.getenv("FORENSICS_ML_URL", "").rstrip("/")
 
 HEADERS = {
     "apikey": SUPABASE_SERVICE_ROLE_KEY,
@@ -274,17 +276,70 @@ def process_job(job: dict) -> None:
         return
 
     if job["job_type"] == "ml_analysis":
-        # Reserved for calibrated neural detectors (e.g. TruFor/DIRE/Universal Fake Detector).
-        # No uncalibrated model score is emitted as evidence.
-        add_evidence(
-            analysis_id,
-            "ml",
-            "model_registry",
-            "neural_detector_stage_not_enabled",
-            None,
-            "informational",
-            {"reason": "requires validated weights, calibration data, and operating points"},
-        )
+        data = storage_get(media["storage_key"])
+        if ML_SERVICE_URL:
+            with httpx.Client(timeout=360) as client:
+                response = client.post(
+                    f"{ML_SERVICE_URL}/v1/infer/trufor",
+                    files={"file": (media["filename"] or "image.jpg", data, media["mime_type"])},
+                )
+                response.raise_for_status()
+                result = response.json()
+            model_name = result.get("model_name", "trufor")
+            model_version = result.get("model_version", "unknown")
+            raw_score = result.get("score")
+            models = rest("GET", f"detector_models?name=eq.{model_name}&version=eq.{model_version}&limit=1") or []
+            model_id = models[0]["id"] if models else None
+            calibration = None
+            calibrated = None
+            if model_id:
+                rows = rest("GET", f"detector_calibrations?detector_model_id=eq.{model_id}&approved=eq.true&order=created_at.desc&limit=1") or []
+                if rows:
+                    calibration = rows[0]
+                    if raw_score is not None and calibration["method"] == "identity":
+                        calibrated = max(0.0, min(1.0, float(raw_score)))
+                    elif raw_score is not None and calibration["method"] == "platt":
+                        a = float(calibration["parameters"]["a"])
+                        b = float(calibration["parameters"]["b"])
+                        z = max(-60.0, min(60.0, a * float(raw_score) + b))
+                        calibrated = 1.0 / (1.0 + math.exp(-z))
+            metadata = {
+                "model_name": model_name,
+                "model_version": model_version,
+                "raw_score": raw_score,
+                "calibration_id": calibration.get("id") if calibration else None,
+                "calibration_approved": bool(calibration) if calibration else False,
+                **(result.get("metadata") or {}),
+            }
+            rest("POST", "detector_runs", json={
+                "analysis_id": analysis_id,
+                "detector_model_id": model_id,
+                "detector_name": model_name,
+                "status": "complete",
+                "score": calibrated,
+                "findings": ["neural_inference_complete"],
+                "artifacts": [],
+                "metadata": metadata,
+            })
+            rest("POST", "evidence_items", json={
+                "analysis_id": analysis_id,
+                "category": "ml",
+                "detector": model_name,
+                "finding": "calibrated_neural_score_available" if calibrated is not None else "neural_score_uncalibrated",
+                "score": calibrated,
+                "strength": "calibrated" if calibrated is not None else "informational",
+                "details": metadata,
+            })
+        else:
+            add_evidence(
+                analysis_id,
+                "ml",
+                "model_registry",
+                "neural_detector_stage_not_enabled",
+                None,
+                "informational",
+                {"reason": "GPU inference service is not configured"},
+            )
         complete_job(job["id"])
         set_analysis(analysis_id, status="evidence_fusion")
         return
